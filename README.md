@@ -9,3 +9,6 @@ The script runs at system startup, turns the screen off, syncs with a Google Dri
  - Rclone to sync with a Google Drive folder: https://rclone.org/drive/
  
  - A way to run the script after the Linux GUI is finished loading, ex (may vary depending on OS version): https://www.raspberrypi.org/forums/viewtopic.php?t=43509
+
+
+Note:  There is a bit of basic logging, but to use it you will need to create a .sh script to call that runs the .py script with output being appended to a .txt file.
