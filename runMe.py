@@ -10,6 +10,9 @@ import subprocess
 import time
 import random
 import shutil
+from PIL import Image
+from PIL import ExifTags
+from PIL import ImageOps
 
 #set screen... needed for some reason to run on boot
 os.environ['DISPLAY'] = ':0'
@@ -24,6 +27,7 @@ picDuration = 15 #15 seconds per picture
 #subprocess.call('vcgencmd display_power 0',shell=True)
 
 #Clears Picture folder for randomization
+print ("clearing old pictures")
 for file in os.listdir('/home/pi/Pictures'):
 	os.remove('/home/pi/Pictures/' + file)
 
@@ -32,7 +36,7 @@ print ("Syncing the google drive folder with local folder")
 subprocess.call('rclone sync drive:/Moms_digital_frame /home/pi/pics',shell=True)
 print ("Sync complete")
 
-#Get a list of the pictures)
+#Get a list of the pictures - change characters that were making issues here
 for file in os.listdir('/home/pi/pics'):
 	if ' ' in file or '(' in file or ')' in file or '\'' in file:
 		print (file)
@@ -43,11 +47,95 @@ for file in os.listdir('/home/pi/pics'):
 		temp = temp.replace('\'', 'q')
 		print (temp)
 		os.rename("/home/pi/pics/" + file, "/home/pi/pics/" + temp)
+
 picDir = '/home/pi/Pictures'
-print ("Copying pictures")
+syncedDir = '/home/pi/pics/'
+print ("Copying and stacking pictures")
+
+#for file in os.listdir('/home/pi/pics'):
+#	shutil.copy('/home/pi/pics/' + file, picDir)
+
+ratio = 1.125  # 1080/1920*2, pics at or above this ratio can be stacked and fit on the screen
+landscapes = []  #holds pictures with a width to height ration greater than or equal to our needed ratio
+
 for file in os.listdir('/home/pi/pics'):
-	shutil.copy('/home/pi/pics/' + file, picDir)
-picDir = '/home/pi/Pictures'
+	if (file.lower().endswith(('.png', '.jpg', '.jpeg'))):
+		image = Image.open('/home/pi/pics/' + file)
+	else:
+		continue
+	image = ImageOps.exif_transpose(image)
+	w = image.size[0]
+	h = image.size[1]
+
+	#if a really small picture is added, bring it up to the minimum size of 1080 (width of the portrait 1080p screen)
+	#if (w/h > 1 and w < 1080):
+	scale_ratio = 1080 / w
+	image = image.resize((int(w * scale_ratio), int(h * scale_ratio)), resample=5)
+
+	try: #if image has orientation data, check it so that we don't end up with portrait pictures rotated landscape
+		if (w/h >= ratio):
+			landscapes.append(image)
+		else: #copy portrait pictures
+			image.save('/home/pi/Pictures/' + file)
+			image.close()
+	except Exception: #if image has no orientation data, then it is properly rotated already and we can directly check if it is landscape
+		if (w/h >= ratio):
+			landscapes.append(image)
+		else: #copy portrait pictures
+			image.save('/home/pi/Pictures/' + file)
+			image.close()
+
+random.shuffle(landscapes)
+while (len(landscapes) > 1):
+	image = landscapes[0]
+	second = landscapes[1]  # default to the next landscape picture to stack
+	for i in range(1, len(landscapes)):  # look through all and find one with a closer width, if available
+		if ((image.size[0] >= second.size[0] and image.size[0] / second.size[0] <= 1.2) or ((image.size[0] <= second.size[0] and image.size[0] / second.size[0] >= .85))):
+			second = landscapes[i]
+			break
+
+	landscapes.remove(image)
+	landscapes.remove(second)
+
+	#resize pics to match size (we have a lot of 4k picutres and a lot of tiny pictures apparently) - added resizing for small picture too earlier in code
+	if (image.size[0] > second.size[0]):
+		image = image.resize((int(image.size[0] * (second.size[0] / image.size[0])), int(image.size[1] * (second.size[0] / image.size[0]))))
+	elif (second.size[0] > image.size[0]):
+		second = second.resize((int(second.size[0] * (image.size[0] / second.size[0])), int(second.size[1] * (image.size[0] / second.size[0]))))
+
+	new_width = image.size[0]
+	if (second.size[0] > image.size[0]):
+		new_width = second.size[0]
+	new_height = new_width * 1.777 #1920/1080, the ratio of the screen in portrait
+	if (image.size[1] + second.size[1] > new_height):
+		new_height = image.size[1] + second.size[1]
+
+	diff_width = abs(image.size[0] - second.size[0])
+	diff_height = abs(image.size[1] - second.size[1])
+	#spacing_width = (new_width - image.size[0] - second.size[0]) / 3
+	spacing_height = (new_height - image.size[1] - second.size[1]) / 3
+
+	image_x = diff_width / 2
+	if (image.size[0] >= second.size[0]):
+		image_x = 0
+	image_y = spacing_height
+
+	second_x = diff_width / 2
+	if (second.size[0] > image.size[0]):
+		second_x = 0
+	second_y = (spacing_height * 2) + image.size[1]
+
+	stacked = Image.new("RGB", (int(new_width), int(new_height)))
+	stacked.paste(image, (int(image_x), int(image_y)))
+	stacked.paste(second, (int(second_x), int(second_y)))
+	image.close()
+	second.close()
+	stacked.save('/home/pi/Pictures/' + "stacked_landscape_" + str(len(landscapes)) +".jpg")
+	stacked.close()
+
+if (len(landscapes) > 0):  # if we have an image left, ignore it for now and it will probably get in next time
+	print("1 landscape picture that didn't get added")
+
 fileList = os.listdir(picDir)
 
 #Randomize the list for displaying
@@ -56,14 +144,14 @@ fileCount = 0
 random.shuffle(fileList)
 for a in fileList:
 	try:
-		if ".heic" in a or ".HEIC" in a:
+		if ".heic" in a or ".HEIC" in a or ".pdf" in a or ".mp4" in a: #remove unsupported types
 			os.remove(picDir + "/" + a)
 			print ("deleted " + a)
 		else:
-			os.rename(picDir + "/" + a, picDir + "/" + str(fileCount) + "." + a.split(".")[1])
+			os.rename(picDir + "/" + a, picDir + "/pipics_" + str(fileCount) + "." + a.split(".")[1])
 			fileCount = fileCount + 1
-	except:
-		print ("Some error renaming the random files")
+	except Exception as e:
+		print ("Some error renaming the random files:" + str(e))
 fileList = os.listdir(picDir)
 
 #Run a slideshow through pi default image viewer
