@@ -1,193 +1,199 @@
-#Add a way to ignore small files? ex. less than 1mb or some dimensions
-#Add a way to convert .heic file to .jpg (apple to normal) - Might be best to do this seperately?
-#Add more time specifications (hours:minutes instead of just hours)
-#Add config file support to make it easier to change settings without editing this script
-#Add image stacking for horizontal images so that more of the screen is taken up
+# TODO:
+# Add a way to convert .heic file to .jpg (apple to normal) - Might be best to do this seperately?
+# Might set up a small flask page to edit the config file and start/stop/restart the script via a browser
 
-import pyautogui
+import PiPictureFrameConfig as config
 import os
+import pyautogui
 import subprocess
 import time
 import random
-import shutil
-from PIL import Image
-from PIL import ExifTags
-from PIL import ImageOps
+from PIL import Image, ImageOps
 
-#set screen... needed for some reason to run on boot
+# Sets the screen to the default display
+# When running manually you may need to use "DISPLAY=:0 python3 runMe.py" as well
 os.environ['DISPLAY'] = ':0'
 
-#variables
-startTime = 8 #8:00am start time for script
-syncTime = 5 #Minutes to start early so there is time for pictures to sync before startTime - usually only takes a minute or so unless a lot of pictures have been added
-bedTime = 22 #10:00pm end time for script
-picDuration = 15 #15 seconds per picture
 
-#turn screen off - delete later (just for demo)
-#subprocess.call('vcgencmd display_power 0',shell=True)
+# FUNCTIONS
 
-#Clears Picture folder for randomization
-print ("clearing old pictures")
-for file in os.listdir('/home/pi/Pictures'):
-	os.remove('/home/pi/Pictures/' + file)
+def print_log(message):
+	# Print with the current time prepended
+	# Really only needed when manually running the script to make sure it is set up correctly
+	print("[{0}] {1}".format(time.strftime("%H:%M:%S"), message))
 
-#sync with our Google Drive folder
-print ("Syncing the google drive folder with local folder")
-subprocess.call('rclone sync drive:/Moms_digital_frame /home/pi/pics',shell=True)
-print ("Sync complete")
+def check_start_time():
+	# Checks to see if the script should sleep when started - only needed when starting manually
+	# Converts everything in to minutes and then checks if we are in the sleep time window
+	start_total_minutes = config.start_time_hour * 60 + config.start_time_minutes
+	stop_total_minutes = config.stop_time_hour * 60 + config.stop_time_minutes
+	duration_minutes = stop_total_minutes - start_total_minutes
+	current_minutes = int(time.strftime("%H")) * 60 + int(time.strftime("%M"))
 
-#Get a list of the pictures - change characters that were making issues here
-for file in os.listdir('/home/pi/pics'):
-	if ' ' in file or '(' in file or ')' in file or '\'' in file:
-		print (file)
-		temp = file
-		temp = temp.replace(' ', '_')
-		temp = temp.replace('(', 'l')
-		temp = temp.replace(')', 'r')
-		temp = temp.replace('\'', 'q')
-		print (temp)
-		os.rename("/home/pi/pics/" + file, "/home/pi/pics/" + temp)
+	# Check if the stop time is earlier timewise than the start time
+	if (stop_total_minutes <= start_total_minutes):
+		duration_minutes = (24 * 60 + stop_total_minutes) - start_total_minutes
 
-picDir = '/home/pi/Pictures'
-syncedDir = '/home/pi/pics/'
-print ("Copying and stacking pictures")
-
-#for file in os.listdir('/home/pi/pics'):
-#	shutil.copy('/home/pi/pics/' + file, picDir)
-
-ratio = 1.125  # 1080/1920*2, pics at or above this ratio can be stacked and fit on the screen
-landscapes = []  #holds pictures with a width to height ration greater than or equal to our needed ratio
-
-for file in os.listdir('/home/pi/pics'):
-	if (file.lower().endswith(('.png', '.jpg', '.jpeg'))):
-		image = Image.open('/home/pi/pics/' + file)
+	# Good to display
+	if (current_minutes < start_total_minutes or current_minutes >= (start_total_minutes + duration_minutes)):
+		print_log("Waiting until " + str(config.start_time_hour) + ":" + str(config.start_time_minutes) + " to start the script")
+		stop_slideshow()  # Calling this will turn the screen off and sleep the script until it's ready to start
 	else:
-		continue
-	image = ImageOps.exif_transpose(image)
-	w = image.size[0]
-	h = image.size[1]
+		print_log("Starting the script")
 
-	#if a really small picture is added, bring it up to the minimum size of 1080 (width of the portrait 1080p screen)
-	#if (w/h > 1 and w < 1080):
-	scale_ratio = 1080 / w
-	image = image.resize((int(w * scale_ratio), int(h * scale_ratio)), resample=5)
+def clear_working_dir():
+	# Clears the working_dir of the previous day's randomized photos
+	print_log("Clearing old pictures")
+	for file in os.listdir(config.working_dir):
+		os.remove(os.path.join(config.working_dir, file))
 
-	try: #if image has orientation data, check it so that we don't end up with portrait pictures rotated landscape
-		if (w/h >= ratio):
-			landscapes.append(image)
-		else: #copy portrait pictures
-			image.save('/home/pi/Pictures/' + file)
-			image.close()
-	except Exception: #if image has no orientation data, then it is properly rotated already and we can directly check if it is landscape
-		if (w/h >= ratio):
-			landscapes.append(image)
-		else: #copy portrait pictures
-			image.save('/home/pi/Pictures/' + file)
-			image.close()
+def sync_gdrive():
+	# Syncs the sync_dir with the Google Drive folder set in the config file
+	print_log("Syncing the google drive folder with local folder")
+	subprocess.call("rclone sync drive:/{0} {1}".format(config.sync_gdrive_folder, config.sync_dir), shell=True)
+	print_log("Sync complete")
 
-random.shuffle(landscapes)
-while (len(landscapes) > 1):
-	image = landscapes[0]
-	second = landscapes[1]  # default to the next landscape picture to stack
-	for i in range(1, len(landscapes)):  # look through all and find one with a closer width, if available
-		if ((image.size[0] >= second.size[0] and image.size[0] / second.size[0] <= 1.2) or ((image.size[0] <= second.size[0] and image.size[0] / second.size[0] >= .85))):
-			second = landscapes[i]
-			break
+def illegal_char_check():
+	# CHECK IF THIS IS STILL NEEDED WITH NEW METHODS.
+	for file in os.listdir(config.sync_dir):
+		if ' ' in file or '(' in file or ')' in file or '\'' in file:
+			print_log(file)
+			temp = file
+			temp = temp.replace(' ', '_')
+			temp = temp.replace('(', 'l')
+			temp = temp.replace(')', 'r')
+			temp = temp.replace('\'', 'q')
+			print_log(temp)
+			os.rename(os.path.join(config.sync_dir, file), os.path.join(config.sync_dir, temp))
 
-	landscapes.remove(image)
-	landscapes.remove(second)
+def resize_and_copy_pics():
+	# Resizes all pictures to the width of the display, then copys them to the working_dir
+	landscape_pics = []  # Holds the file names of all landscape oriented pictures, so that we don't have to go back through later
 
-	#resize pics to match size (we have a lot of 4k picutres and a lot of tiny pictures apparently) - added resizing for small picture too earlier in code
-	if (image.size[0] > second.size[0]):
-		image = image.resize((int(image.size[0] * (second.size[0] / image.size[0])), int(image.size[1] * (second.size[0] / image.size[0]))))
-	elif (second.size[0] > image.size[0]):
-		second = second.resize((int(second.size[0] * (image.size[0] / second.size[0])), int(second.size[1] * (image.size[0] / second.size[0]))))
-
-	new_width = image.size[0]
-	if (second.size[0] > image.size[0]):
-		new_width = second.size[0]
-	new_height = new_width * 1.777 #1920/1080, the ratio of the screen in portrait
-	if (image.size[1] + second.size[1] > new_height):
-		new_height = image.size[1] + second.size[1]
-
-	diff_width = abs(image.size[0] - second.size[0])
-	diff_height = abs(image.size[1] - second.size[1])
-	#spacing_width = (new_width - image.size[0] - second.size[0]) / 3
-	spacing_height = (new_height - image.size[1] - second.size[1]) / 3
-
-	image_x = diff_width / 2
-	if (image.size[0] >= second.size[0]):
-		image_x = 0
-	image_y = spacing_height
-
-	second_x = diff_width / 2
-	if (second.size[0] > image.size[0]):
-		second_x = 0
-	second_y = (spacing_height * 2) + image.size[1]
-
-	stacked = Image.new("RGB", (int(new_width), int(new_height)))
-	stacked.paste(image, (int(image_x), int(image_y)))
-	stacked.paste(second, (int(second_x), int(second_y)))
-	image.close()
-	second.close()
-	stacked.save('/home/pi/Pictures/' + "stacked_landscape_" + str(len(landscapes)) +".jpg")
-	stacked.close()
-
-if (len(landscapes) > 0):  # if we have an image left, ignore it for now and it will probably get in next time
-	print("1 landscape picture that didn't get added")
-
-fileList = os.listdir(picDir)
-
-#Randomize the list for displaying
-print ("Randomizing pictures")
-fileCount = 0
-random.shuffle(fileList)
-for a in fileList:
-	try:
-		if ".heic" in a or ".HEIC" in a or ".pdf" in a or ".mp4" in a: #remove unsupported types
-			os.remove(picDir + "/" + a)
-			print ("deleted " + a)
+	print_log("Resizing and copying pictures to working_dir")
+	for file in os.listdir(config.sync_dir):
+		if (file.lower().endswith(('.png', '.jpg', '.jpeg'))):  # Only open pictures, in case other files are added to the GDrive
+			image = Image.open(os.path.join(config.sync_dir, file))
 		else:
-			os.rename(picDir + "/" + a, picDir + "/pipics_" + str(fileCount) + "." + a.split(".")[1])
-			fileCount = fileCount + 1
-	except Exception as e:
-		print ("Some error renaming the random files:" + str(e))
-fileList = os.listdir(picDir)
+			continue
+		image = ImageOps.exif_transpose(image)  # Try rotating the image if it needs to be rotated (a jpg with exif orientation tag)
+		w = image.size[0]
+		h = image.size[1]
 
-#Run a slideshow through pi default image viewer
-print ("Displaying slideshow")
-subprocess.Popen(["xdg-open", picDir + '/' + fileList[0]])
-time.sleep(5)
-pyautogui.press('f')
-time.sleep(1)
-pyautogui.press('f11')
-time.sleep(1)
-#move mouse to bottom right/out of view
-pyautogui.FAILSAFE = False
-pyautogui.moveTo(1920,1080) #move the cursor out of view (corner of the screen)
-time.sleep(1)
-subprocess.call('vcgencmd display_power 1',shell=True) #turn the screen on now that we are displaying a picture
-while (int(time.strftime("%H")) <= bedTime or int(time.strftime("%H")) < startTime): #Will run until bedTime
-	time.sleep(picDuration)
-	#print ("Next picture")
-	pyautogui.press('right')
-time.sleep(3)
-print ("Goodnight")
-pyautogui.press('esc')
-time.sleep(2)
-pyautogui.press('esc')
-time.sleep(5)
-subprocess.call('vcgencmd display_power 0',shell=True) #turn the screen off for the night (should happen approximately 10:00pm)
+		# Scale the image to match the width of the screen
+		scale_ratio = config.screen_width / w
+		image = image.resize((int(w * scale_ratio), int(h * scale_ratio)), resample=5)
 
-#dumm way to get hours until startTime that doesn't mess up if you pick midnight or early morning (ex 1am)
-timeUntilStart = ((24 - bedTime) + startTime - 1) #for some reason this is one hour more than I expected so have to - 1
-#while (bedTime != startTime):
-#	bedTime = bedTime + 1
-#	timeUntilStart = timeUntilStart + 1
-#	if (bedTime == 24):
-#		bedTime = 0
-#subprocess.call('vcgencmd display_power 0',shell=True) #turn the screen off for the night (should happen approximately 10:00pm)
+		# Check if the picture is horizontal/landscape (w > h, above the wh_ratio), add to list we return if it is
+		if ((w / h) > config.wh_ratio):
+			landscape_pics.append(file)
 
-#sleep until startTime
-time.sleep((timeUntilStart * 60 * 60) - syncTime * 60) #Seconds until startTime
-os.system('reboot') #reboot every morning and script runs on reboot - not sure if this is a bad idea but I figured it will stop any problems from leaving it running for a long time
+		# Save the resized image to the working_dir and close it so that we don't run out of ram
+		image.save(os.path.join(config.working_dir, file))
+		image.close()
+
+	return landscape_pics
+
+def stack_landscape_pics(landscapes):
+	# Pairs up and stacks landscape pictures (w/h > 1) to reduce blank screen space when displaying pics
+	random.shuffle(landscapes)  # Randomize the order we go through the landscape pics so that they get paired up differently every day
+
+	print_log("Stacking landscape pics")
+	while (len(landscapes) > 1):
+		top_path = os.path.join(config.working_dir, landscapes.pop())
+		bottom_path = os.path.join(config.working_dir, landscapes.pop())
+		top = Image.open(top_path)
+		bottom = Image.open(bottom_path)
+
+		# Divide the difference in the height of both pictures and the screen height so that we can have
+		# equal blank space at the top, bottom, and in between both pics
+		spacing_height = (config.screen_height - top.size[1] - bottom.size[1]) / 3
+		bottom_pic_offset = spacing_height + top.size[1] + spacing_height
+
+		# Make a new blank image the size of the screen, then stack the two pics
+		stacked = Image.new("RGB", (config.screen_width, config.screen_height))
+		stacked.paste(top, (0, int(spacing_height)))
+		stacked.paste(bottom, (0, int(bottom_pic_offset)))
+
+		# Save the new image, close all 3 so we don't run out of ram, delete the non-stacked versions
+		stacked.save(os.path.join(config.working_dir, "stacked_landscape_{0}.jpg".format(str(len(landscapes)))))
+		stacked.close()
+		top.close()
+		bottom.close()
+		os.remove(top_path)
+		os.remove(bottom_path)
+	
+	if (len(landscapes) > 0):  # If we have an image left, ignore it for now and it will probably get in tomorrow
+		print_log("1 landscape picture didn't get added: " + landscapes.pop())
+
+def randomize_pics():
+	# Randomizes the pictures in the working_dir so that the order they are displayed in is different every day
+	file_list = os.listdir(config.working_dir)
+	file_count = 0
+	random.shuffle(file_list)
+
+	print_log("Renaming randomized pics")
+	for a in file_list:
+		#try:
+		os.rename(os.path.join(config.working_dir, a), os.path.join(config.working_dir, "pipics_{0}{1}".format(str(file_count), os.path.splitext(a)[1])))
+		file_count = file_count + 1
+		#except Exception as e:
+		#	print ("Some error renaming the random files:" + str(e))
+
+	file_list = os.listdir(config.working_dir)
+	return file_list[0]
+
+def start_slideshow(starting_pic):
+	# Start displaying the working_dir pics using the default Raspbian/Ubuntu image viewer
+	print_log("Displaying slideshow")
+	subprocess.Popen(["xdg-open", os.path.join(config.working_dir, starting_pic)])
+	time.sleep(5)
+	pyautogui.press('f')  # One of these does full screen, can't remember what the other does
+	time.sleep(1)
+	pyautogui.press('f11')  # One of these does full screen, can't remember what the other does
+	time.sleep(1)
+	pyautogui.FAILSAFE = False  # Removes some error that was happening when moving the cursor
+	pyautogui.moveTo(config.screen_height, config.screen_width)  # Move the cursor out of view (bottom right corner of the screen)
+	time.sleep(1)
+	subprocess.call('vcgencmd display_power 1', shell=True)  # Turn the screen on - Only needed when manually testing the script
+
+def stop_slideshow():
+	# Stops displaying pictures, turns the display off, then waits until the script needs to start again and restarts the Pi
+	print_log("Stopping slideshow")
+	time.sleep(3)
+	pyautogui.press("esc")
+	time.sleep(2)
+	pyautogui.press("esc")
+	time.sleep(5)
+	subprocess.call("vcgencmd display_power 0", shell=True) #turn the screen off for the night (turns off the hdmi output on the Pi)
+
+	# Calculate how many minutes until the script needs to run again, assuming that the end time is later than the start time on a 24hr clock
+	minutes_until_start = (((23 - config.stop_time_hour) + config.start_time_hour) * 60) + config.start_time_minutes
+
+	# If the end time is earlier than the start time (Ex. start at 10pm and run until 7am)
+	if ((config.stop_time_hour * 60 + config.stop_time_minutes) <= (config.start_time_hour * 60 + config.start_time_minutes)):
+		minutes_until_start = (config.stop_time_hour * 60 + config.stop_time_minutes) - (config.start_time_hour * 60 + config.start_time_minutes)
+
+	# Sleep until the next day's start time, then reboot the machine
+	time.sleep((minutes_until_start * 60) - config.additional_sync_time * 60) #Seconds until startTime
+	os.system("reboot")  # Reboot every morning, the script will start on reboot when set up for lxsession autostart
+
+
+# SCRIPT
+
+check_start_time()
+clear_working_dir()
+sync_gdrive()
+#illegal_char_check() #IS THIS NEEDED
+landscape_pics = resize_and_copy_pics()
+stack_landscape_pics(landscape_pics)
+first_pic = randomize_pics()
+start_slideshow(first_pic)
+
+# Cycle through the working_dir pics while we are between start_time and stop_time
+# Has its limitations - won't work well if you use a very long picture time and stop just before midnight (ex. stop at 11:30 PM with 1 hour pics)
+while ((int(time.strftime("%H")) * 60 + int(time.strftime('%M')) < (config.stop_time_hour * 60 + config.stop_time_minutes))): #Will run until bedTime
+	time.sleep(config.pic_duration)
+	pyautogui.press('right')  # Go to the next picture in GPicView
+
+stop_slideshow()
