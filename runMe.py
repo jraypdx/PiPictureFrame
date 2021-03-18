@@ -53,6 +53,19 @@ def sync_gdrive():
 	subprocess.call("rclone sync drive:/{0} {1}".format(config.sync_gdrive_folder, config.sync_dir), shell=True)
 	print_log("Sync complete")
 
+def illegal_char_check():
+	# CHECK IF THIS IS STILL NEEDED WITH NEW METHODS.
+	for file in os.listdir(config.sync_dir):
+		if ' ' in file or '(' in file or ')' in file or '\'' in file:
+			print_log(file)
+			temp = file
+			temp = temp.replace(' ', '_')
+			temp = temp.replace('(', 'l')
+			temp = temp.replace(')', 'r')
+			temp = temp.replace('\'', 'q')
+			print_log(temp)
+			os.rename(os.path.join(config.sync_dir, file), os.path.join(config.sync_dir, temp))
+
 def resize_and_copy_pics():
 	# Resizes all pictures to the width of the display, then copys them to the working_dir
 	landscape_pics = []  # Holds the file names of all landscape oriented pictures, so that we don't have to go back through later
@@ -155,14 +168,16 @@ def stop_slideshow():
 	subprocess.call("vcgencmd display_power 0", shell=True) #turn the screen off for the night (turns off the hdmi output on the Pi)
 
 	# Calculate how many minutes until the script needs to run again, assuming that the end time is later than the start time on a 24hr clock
-	minutes_until_start = (((23 - config.stop_time_hour) + config.start_time_hour) * 60) + config.start_time_minutes
+	minutes_until_start = ((24 - config.stop_time_hour) * 60 - config.stop_time_minutes) + config.start_time_hour * 60 + config.start_time_minutes
 
 	# If the end time is earlier than the start time (Ex. start at 10pm and run until 7am)
 	if ((config.stop_time_hour * 60 + config.stop_time_minutes) <= (config.start_time_hour * 60 + config.start_time_minutes)):
-		minutes_until_start = (config.stop_time_hour * 60 + config.stop_time_minutes) - (config.start_time_hour * 60 + config.start_time_minutes)
+		minutes_until_start = (config.start_time_hour * 60 + config.start_time_minutes) - (config.stop_time_hour * 60 + config.stop_time_minutes)
 
 	# Sleep until the next day's start time, then reboot the machine
+	print_log("sleeping " + str(minutes_until_start) + " minutes before rebooting")
 	time.sleep((minutes_until_start * 60) - config.additional_sync_time * 60) #Seconds until startTime
+	print_log("rebooting")
 	os.system("reboot")  # Reboot every morning, the script will start on reboot when set up for lxsession autostart
 
 
@@ -171,6 +186,7 @@ def stop_slideshow():
 check_start_time()
 clear_working_dir()
 sync_gdrive()
+#illegal_char_check() #IS THIS NEEDED
 landscape_pics = resize_and_copy_pics()
 stack_landscape_pics(landscape_pics)
 first_pic = randomize_pics()
