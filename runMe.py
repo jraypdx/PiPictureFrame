@@ -25,14 +25,14 @@ def print_log(message):
 def check_start_time():
 	# Checks to see if the script should sleep when started - only needed when starting manually
 	# Converts everything in to minutes and then checks if we are in the sleep time window
-	start_total_minutes = config.start_time_hour * 60 + config.start_time_minutes
+	start_total_minutes = config.start_time_hour * 60 + config.start_time_minutes - config.additional_sync_time
 	stop_total_minutes = config.stop_time_hour * 60 + config.stop_time_minutes
 	duration_minutes = stop_total_minutes - start_total_minutes
 	current_minutes = int(time.strftime("%H")) * 60 + int(time.strftime("%M"))
 
 	# Check if the stop time is earlier timewise than the start time
 	if (stop_total_minutes <= start_total_minutes):
-		duration_minutes = (24 * 60 + stop_total_minutes) - start_total_minutes
+		duration_minutes = (24 * 60) - (start_total_minutes - stop_total_minutes)
 
 	# Good to display
 	if (current_minutes < start_total_minutes or current_minutes >= (start_total_minutes + duration_minutes)):
@@ -52,6 +52,19 @@ def sync_gdrive():
 	print_log("Syncing the google drive folder with local folder")
 	subprocess.call("rclone sync drive:/{0} {1}".format(config.sync_gdrive_folder, config.sync_dir), shell=True)
 	print_log("Sync complete")
+
+def illegal_char_check():
+	# CHECK IF THIS IS STILL NEEDED WITH NEW METHODS.
+	for file in os.listdir(config.sync_dir):
+		if ' ' in file or '(' in file or ')' in file or '\'' in file:
+			print_log(file)
+			temp = file
+			temp = temp.replace(' ', '_')
+			temp = temp.replace('(', 'l')
+			temp = temp.replace(')', 'r')
+			temp = temp.replace('\'', 'q')
+			print_log(temp)
+			os.rename(os.path.join(config.sync_dir, file), os.path.join(config.sync_dir, temp))
 
 def resize_and_copy_pics():
 	# Resizes all pictures to the width of the display, then copys them to the working_dir
@@ -173,6 +186,7 @@ def stop_slideshow():
 check_start_time()
 clear_working_dir()
 sync_gdrive()
+#illegal_char_check() #IS THIS NEEDED
 landscape_pics = resize_and_copy_pics()
 stack_landscape_pics(landscape_pics)
 first_pic = randomize_pics()
